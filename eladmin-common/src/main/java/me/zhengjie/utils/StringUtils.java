@@ -18,8 +18,8 @@ package me.zhengjie.utils;
 import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
-import eu.bitwalker.useragentutils.Browser;
-import eu.bitwalker.useragentutils.UserAgent;
+import nl.basjes.parse.useragent.UserAgent;
+import nl.basjes.parse.useragent.UserAgentAnalyzer;
 import org.lionsoul.ip2region.DataBlock;
 import org.lionsoul.ip2region.DbConfig;
 import org.lionsoul.ip2region.DbSearcher;
@@ -29,10 +29,13 @@ import org.springframework.core.io.ClassPathResource;
 
 import javax.servlet.http.HttpServletRequest;
 import java.io.File;
+import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.UnknownHostException;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.Enumeration;
 
 /**
  * @author Zheng Jie
@@ -46,6 +49,14 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
     private static DbConfig config;
     private static final char SEPARATOR = '_';
     private static final String UNKNOWN = "unknown";
+
+    private static final UserAgentAnalyzer userAgentAnalyzer = UserAgentAnalyzer
+            .newBuilder()
+            .hideMatcherLoadStats()
+            .withCache(10000)
+            .withField(UserAgent.AGENT_NAME_VERSION)
+            .build();
+
 
     static {
         SpringContextHolder.addCallBacks(() -> {
@@ -222,9 +233,8 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
     }
 
     public static String getBrowser(HttpServletRequest request) {
-        UserAgent userAgent = UserAgent.parseUserAgentString(request.getHeader("User-Agent"));
-        Browser browser = userAgent.getBrowser();
-        return browser.getName();
+        UserAgent.ImmutableUserAgent userAgent = userAgentAnalyzer.parse(request.getHeader("User-Agent"));
+        return userAgent.get(UserAgent.AGENT_NAME_VERSION).getValue();
     }
 
     /**
@@ -248,20 +258,37 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
      * @return /
      */
     public static String getLocalIp() {
-        InetAddress addr;
         try {
-            addr = InetAddress.getLocalHost();
-        } catch (UnknownHostException e) {
-            return "unknown";
-        }
-        byte[] ipAddr = addr.getAddress();
-        StringBuilder ipAddrStr = new StringBuilder();
-        for (int i = 0; i < ipAddr.length; i++) {
-            if (i > 0) {
-                ipAddrStr.append(".");
+            InetAddress candidateAddress = null;
+            // 遍历所有的网络接口
+            for (Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces(); interfaces.hasMoreElements();) {
+                NetworkInterface anInterface = interfaces.nextElement();
+                // 在所有的接口下再遍历IP
+                for (Enumeration<InetAddress> inetAddresses = anInterface.getInetAddresses(); inetAddresses.hasMoreElements();) {
+                    InetAddress inetAddr = inetAddresses.nextElement();
+                    // 排除loopback类型地址
+                    if (!inetAddr.isLoopbackAddress()) {
+                        if (inetAddr.isSiteLocalAddress()) {
+                            // 如果是site-local地址，就是它了
+                            return inetAddr.getHostAddress();
+                        } else if (candidateAddress == null) {
+                            // site-local类型的地址未被发现，先记录候选地址
+                            candidateAddress = inetAddr;
+                        }
+                    }
+                }
             }
-            ipAddrStr.append(ipAddr[i] & 0xFF);
+            if (candidateAddress != null) {
+                return candidateAddress.getHostAddress();
+            }
+            // 如果没有发现 non-loopback地址.只能用最次选的方案
+            InetAddress jdkSuppliedAddress = InetAddress.getLocalHost();
+            if (jdkSuppliedAddress == null) {
+                return "";
+            }
+            return jdkSuppliedAddress.getHostAddress();
+        } catch (Exception e) {
+            return "";
         }
-        return ipAddrStr.toString();
     }
 }
